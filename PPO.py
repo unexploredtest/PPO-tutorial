@@ -39,6 +39,13 @@ class PPO:
             A_k = (A_k - A_k.mean()) / (A_k.std() + 1e-10)
 
             for _ in range(self.n_updates_per_iteration):
+                # Learning Rate Annealing
+                frac = (current_step - 1.0) / total_timesteps
+                new_lr = self.lr * (1.0 - frac)
+                new_lr = max(new_lr, 0)
+                self.actor_optim.param_groups[0]["lr"] = new_lr
+                self.critic_optim.param_groups[0]["lr"] = new_lr 
+
                 V, curr_log_probs = self._evaluate(batch_obs, batch_acts)
 
                 ratios = torch.exp(curr_log_probs - batch_log_probs)
