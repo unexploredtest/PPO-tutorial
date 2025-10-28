@@ -21,6 +21,7 @@ class PPO:
         self.n_updates_per_iteration = 5
         self.clip = 0.2
         self.lr = 0.005
+        self.num_minibatchs = 100
 
         self.actor_optim = torch.optim.Adam(self.actor.parameters(), lr=self.lr)
         self.critic_optim = torch.optim.Adam(self.critic.parameters(), lr=self.lr)
@@ -38,6 +39,9 @@ class PPO:
             A_k = batch_rtgs - V.detach()
             A_k = (A_k - A_k.mean()) / (A_k.std() + 1e-10)
 
+            step = batch_obs.shape[0]
+            indices = np.arange(step)
+            minibatch_size = step // self.num_minibatchs
             for _ in range(self.n_updates_per_iteration):
                 # Learning Rate Annealing
                 frac = (current_step - 1.0) / total_timesteps
@@ -46,24 +50,34 @@ class PPO:
                 self.actor_optim.param_groups[0]["lr"] = new_lr
                 self.critic_optim.param_groups[0]["lr"] = new_lr 
 
-                V, curr_log_probs = self._evaluate(batch_obs, batch_acts)
+                np.random.shuffle(indices)
+                for start in range(0, step, minibatch_size):
+                    end = start + minibatch_size
+                    index = indices[start:end]
+                    mini_obs = batch_obs[index]
+                    mini_acts = batch_acts[index]
+                    mini_log_probs = batch_log_probs[index]
+                    mini_advantage = A_k[index]
+                    mini_rtgs = batch_rtgs[index]
 
-                ratios = torch.exp(curr_log_probs - batch_log_probs)
+                    V, curr_log_probs = self._evaluate(mini_obs, mini_acts)
 
-                surr1 = ratios * A_k
-                surr2 = torch.clamp(ratios, 1 - self.clip, 1 + self.clip) * A_k
+                    ratios = torch.exp(curr_log_probs - mini_log_probs)
 
-                actor_loss = (-torch.min(surr1, surr2)).mean()
+                    surr1 = ratios * mini_advantage
+                    surr2 = torch.clamp(ratios, 1 - self.clip, 1 + self.clip) * mini_advantage
 
-                self.actor_optim.zero_grad()
-                actor_loss.backward(retain_graph=True)
-                self.actor_optim.step()
+                    actor_loss = (-torch.min(surr1, surr2)).mean()
 
-                critic_loss = torch.nn.MSELoss()(V, batch_rtgs)
+                    self.actor_optim.zero_grad()
+                    actor_loss.backward(retain_graph=True)
+                    self.actor_optim.step()
 
-                self.critic_optim.zero_grad()
-                critic_loss.backward()
-                self.critic_optim.step()
+                    critic_loss = torch.nn.MSELoss()(V, mini_rtgs)
+
+                    self.critic_optim.zero_grad()
+                    critic_loss.backward()
+                    self.critic_optim.step()
 
             current_step += np.sum(batch_lens)
 
