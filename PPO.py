@@ -2,6 +2,8 @@ import numpy as np
 import gymnasium as gym
 import torch
 from torch.distributions import MultivariateNormal
+import torch.nn.functional as F
+from torch.distributions import Categorical
 
 from network import Mlp
 
@@ -10,7 +12,10 @@ class PPO:
     def __init__(self, env):
         self.env = env
         self.obs_dim = self.env.observation_space.shape[0]
-        self.act_dim = self.env.action_space.shape[0]
+        if(isinstance(self.env.action_space, gym.spaces.Discrete)):
+            self.act_dim = self.env.action_space.n
+        else:
+            self.act_dim = self.env.action_space.shape[0]
 
         self.actor = Mlp(self.obs_dim, self.act_dim)
         self.critic = Mlp(self.obs_dim, 1)
@@ -83,8 +88,12 @@ class PPO:
 
     def predict(self, obs):
         with torch.no_grad():
-            action_mean = self.actor(obs)
-            return action_mean.numpy()
+            if(isinstance(self.env.action_space, gym.spaces.Discrete)):
+                action_probs = self.actor(obs)
+                return torch.argmax(action_probs).item()
+            else:
+                action_mean = self.actor(obs)
+                return action_mean.numpy()
 
     def _rollout(self):
         batch_obs = []
@@ -109,7 +118,10 @@ class PPO:
                 batch_obs.append(obs)
 
                 action, log_prob = self._get_action(obs)
-                obs, reward, done, truncated, info = self.env.step(action)
+                if(isinstance(self.env.action_space, gym.spaces.Discrete)):
+                    obs, reward, done, truncated, info = self.env.step(action.item())
+                else:
+                    obs, reward, done, truncated, info = self.env.step(action)
 
                 ep_rewards.append(reward)
                 batch_acts.append(action)
@@ -130,13 +142,22 @@ class PPO:
         return batch_obs, batch_acts, batch_log_probs, batch_rtgs, batch_lens
 
     def _get_action(self, obs):
-        mean = self.actor(obs)
+        # https://stackoverflow.com/questions/60531143/how-to-adapt-ppo-from-continuous-to-discrete-action-spaces
+        if(isinstance(self.env.action_space, gym.spaces.Discrete)):
+            values = self.actor(obs)
+            softmax_probs = F.softmax(values, dim=0)
+            m = Categorical(softmax_probs)
+            action = m.sample()
 
-        dist = MultivariateNormal(mean, self.cov_mat)
-        action = dist.sample()
-        log_prob = dist.log_prob(action)
+            return action, softmax_probs[action].detach()
+        else:
+            mean = self.actor(obs)
 
-        return action.detach().numpy(), log_prob.detach()
+            dist = MultivariateNormal(mean, self.cov_mat)
+            action = dist.sample()
+            log_prob = dist.log_prob(action)
+
+            return action.detach().numpy(), log_prob.detach()
 
     def _compute_rtgs(self, batch_rewards):
         batch_rtgs = []
@@ -155,19 +176,27 @@ class PPO:
     def _evaluate(self, batch_obs, batch_acts):
         V = self.critic(batch_obs).squeeze()
 
-        mean = self.actor(batch_obs)
-        dist = MultivariateNormal(mean, self.cov_mat)
-        log_probs = dist.log_prob(batch_acts)
+        if(isinstance(self.env.action_space, gym.spaces.Discrete)):
+            values = self.actor(batch_obs)
+            dist = F.softmax(values, dim=1)
+            actions = batch_acts.to(torch.int32)
+            softmax_probs = dist[torch.arange(dist.size(0)), actions]
 
-        return V, log_probs
+            return V, softmax_probs
+        else:
+            mean = self.actor(batch_obs)
+            dist = MultivariateNormal(mean, self.cov_mat)
+            log_probs = dist.log_prob(batch_acts)
+
+            return V, log_probs
 
 
 if __name__ == "__main__":
-    env = gym.make('Pendulum-v1')
+    env = gym.make('CartPole-v1')
     model = PPO(env)
     model.learn(200_000)
 
-    env2 = gym.make('Pendulum-v1', render_mode="human")
+    env2 = gym.make('CartPole-v1', render_mode="human")
 
     obs, _ = env2.reset()
     done = False
