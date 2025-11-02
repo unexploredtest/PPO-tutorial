@@ -72,7 +72,7 @@ class PPO:
 
                     ratios = torch.exp(curr_log_probs - mini_log_probs)
 
-                    approx_kl = ((ratios - 1) - logratios).mean()
+                    approx_kl = ((ratios - 1) - ratios).mean()
                     if(approx_kl > self.target_kl):
                         break
 
