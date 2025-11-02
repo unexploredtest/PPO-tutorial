@@ -29,6 +29,7 @@ class PPO:
         self.num_minibatchs = 100
         self.ent_coef = 0.1
         self.max_grad_norm = 0.5
+        self.target_kl = 0.1
 
         self.actor_optim = torch.optim.Adam(self.actor.parameters(), lr=self.lr)
         self.critic_optim = torch.optim.Adam(self.critic.parameters(), lr=self.lr)
@@ -70,6 +71,10 @@ class PPO:
                     V, curr_log_probs, entropy = self._evaluate(mini_obs, mini_acts)
 
                     ratios = torch.exp(curr_log_probs - mini_log_probs)
+
+                    approx_kl = ((ratios - 1) - logratios).mean()
+                    if(approx_kl > self.target_kl):
+                        break
 
                     surr1 = ratios * mini_advantage
                     surr2 = torch.clamp(ratios, 1 - self.clip, 1 + self.clip) * mini_advantage
