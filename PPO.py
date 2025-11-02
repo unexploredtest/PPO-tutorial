@@ -28,6 +28,7 @@ class PPO:
         self.lr = 0.005
         self.num_minibatchs = 100
         self.ent_coef = 0.1
+        self.max_grad_norm = 0.5
 
         self.actor_optim = torch.optim.Adam(self.actor.parameters(), lr=self.lr)
         self.critic_optim = torch.optim.Adam(self.critic.parameters(), lr=self.lr)
@@ -79,12 +80,14 @@ class PPO:
 
                     self.actor_optim.zero_grad()
                     actor_loss.backward(retain_graph=True)
+                    torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
                     self.actor_optim.step()
 
                     critic_loss = torch.nn.MSELoss()(V, mini_rtgs)
 
                     self.critic_optim.zero_grad()
                     critic_loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
                     self.critic_optim.step()
 
             current_step += np.sum(batch_lens)
@@ -197,10 +200,12 @@ class PPO:
 
 if __name__ == "__main__":
     env = gym.make('CartPole-v1')
+    # env = gym.make('Pendulum-v1')
     model = PPO(env)
     model.learn(200_000)
 
     env2 = gym.make('CartPole-v1', render_mode="human")
+    # env2 = gym.make('Pendulum-v1', render_mode="human")
 
     obs, _ = env2.reset()
     done = False
