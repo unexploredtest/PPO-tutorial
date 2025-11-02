@@ -27,6 +27,7 @@ class PPO:
         self.clip = 0.2
         self.lr = 0.005
         self.num_minibatchs = 100
+        self.ent_coef = 0.1
 
         self.actor_optim = torch.optim.Adam(self.actor.parameters(), lr=self.lr)
         self.critic_optim = torch.optim.Adam(self.critic.parameters(), lr=self.lr)
@@ -40,7 +41,7 @@ class PPO:
         while(current_step < total_timesteps):
             batch_obs, batch_acts, batch_log_probs, batch_rtgs, batch_lens = self._rollout()
 
-            V, _ = self._evaluate(batch_obs, batch_acts)
+            V, _, _ = self._evaluate(batch_obs, batch_acts)
             A_k = batch_rtgs - V.detach()
             A_k = (A_k - A_k.mean()) / (A_k.std() + 1e-10)
 
@@ -65,7 +66,7 @@ class PPO:
                     mini_advantage = A_k[index]
                     mini_rtgs = batch_rtgs[index]
 
-                    V, curr_log_probs = self._evaluate(mini_obs, mini_acts)
+                    V, curr_log_probs, entropy = self._evaluate(mini_obs, mini_acts)
 
                     ratios = torch.exp(curr_log_probs - mini_log_probs)
 
@@ -73,6 +74,8 @@ class PPO:
                     surr2 = torch.clamp(ratios, 1 - self.clip, 1 + self.clip) * mini_advantage
 
                     actor_loss = (-torch.min(surr1, surr2)).mean()
+                    entropy_loss = entropy.mean()
+                    actor_loss = actor_loss - self.ent_coef * entropy_loss
 
                     self.actor_optim.zero_grad()
                     actor_loss.backward(retain_graph=True)
@@ -181,14 +184,15 @@ class PPO:
             dist = F.softmax(values, dim=1)
             actions = batch_acts.to(torch.int32)
             softmax_probs = dist[torch.arange(dist.size(0)), actions]
+            entropy = -torch.sum(dist * torch.log(dist + 1e-10))
 
-            return V, softmax_probs
+            return V, softmax_probs, entropy
         else:
             mean = self.actor(batch_obs)
             dist = MultivariateNormal(mean, self.cov_mat)
             log_probs = dist.log_prob(batch_acts)
 
-            return V, log_probs
+            return V, log_probs, dist.entropy()
 
 
 if __name__ == "__main__":
